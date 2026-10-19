@@ -1,0 +1,74 @@
+# ==========================================
+# 1. CMake & Build Artifacts
+# ==========================================
+# Common build directory names
+build/
+build-artifacts/
+out/
+
+# In-source build artifacts (if CMake is run inside the source directory)
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+*-prefix/
+
+# ==========================================
+# 2. C++ Compiled Binaries & Libraries
+# ==========================================
+# Compiled Object files
+*.a
+*.lib
+*.o
+*.obj
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Debug symbols & memory dumps
+*.dSYM/
+*.pdb
+*.ilk
+
+# ==========================================
+# 3. IDEs & Editors
+# ==========================================
+# JetBrains CLion
+.idea/
+cmake-build-*/
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+
+# Text editors (Vim / Emacs / Sublime)
+*.swp
+*.swo
+*~
+
+# ==========================================
+# 4. Operating System Files
+# ==========================================
+.DS_Store
+Thumbs.db
+
