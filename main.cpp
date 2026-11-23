@@ -1,4 +1,6 @@
 #include <assert.h>
+
+#include "PipelineCpu.h"
 #include "SequentialCpu.h"
 using namespace std;
 
@@ -32,7 +34,60 @@ void testSequentialCPU()
     assert(cpu.memory().load_word(64) == 7);
     assert(cpu.pc() == 36);
 }
+
+void testNegativeOffsetsAndBranches()
+{
+    pipeline_sim::SequentialCpu cpu{256};
+
+    cpu.memory().store_word(0,  0x08000513u); // addi x10, x0, 128
+    cpu.memory().store_word(4,  0xFFF00093u); // addi x1, x0, -1
+    cpu.memory().store_word(8,  0xFE152E23u); // sw x1, -4(x10)
+    cpu.memory().store_word(12, 0xFFC52103u); // lw x2, -4(x10)
+    cpu.memory().store_word(16, 0x00008463u); // beq x1, x0, 8 (not taken)
+    cpu.memory().store_word(20, 0xFF800193u); // addi x3, x0, -8
+    cpu.memory().store_word(24, 0xFE108EE3u); // beq x1, x1, -4 (taken)
+
+    for (int i = 0; i < 7; ++i) {
+        cpu.step();
+    }
+
+    assert(cpu.registers().read(1) == 0xFFFFFFFFu);
+    assert(cpu.registers().read(2) == 0xFFFFFFFFu);
+    assert(cpu.registers().read(3) == 0xFFFFFFF8u);
+
+    assert(cpu.memory().load_word(124) == 0xFFFFFFFFu);
+
+    // Final branch at address 24 jumps backward to address 20.
+    assert(cpu.pc() == 20);
+}
+
+void testBasicPipeline()
+{
+    pipeline_sim::PipelineCpu cpu{256};
+
+    cpu.memory().store_word(0,  0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4,  0x00700113u); // addi x2, x0, 7
+    cpu.memory().store_word(8,  0x00900193u); // addi x3, x0, 9
+
+    // addi x0, x0, 0 acts as a NOP.
+    cpu.memory().store_word(12, 0x00000013u);
+    cpu.memory().store_word(16, 0x00000013u);
+    cpu.memory().store_word(20, 0x00000013u);
+    cpu.memory().store_word(24, 0x00000013u);
+
+    for (int cycle = 0; cycle < 7; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(0) == 0);
+    assert(cpu.registers().read(1) == 5);
+    assert(cpu.registers().read(2) == 7);
+    assert(cpu.registers().read(3) == 9);
+    assert(cpu.pc() == 28);
+}
 int main() {
     testSequentialCPU();
+    testNegativeOffsetsAndBranches();
+    testBasicPipeline();
     return 0;
 }

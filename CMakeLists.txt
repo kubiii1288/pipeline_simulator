@@ -12,4 +12,7 @@ add_executable(pipeline_simulator main.cpp
         Decoder.cpp
         Decoder.h
         SequentialCpu.cpp
-        SequentialCpu.h)
+        SequentialCpu.h
+        PipelineRegisters.h
+        PipelineCpu.cpp
+        PipelineCpu.h)
