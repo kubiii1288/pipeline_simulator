@@ -33,10 +33,17 @@ namespace pipeline_sim
        return counters_;
     }
 
+    const std::vector<CycleTrace> &PipelineCpu::trace() const noexcept
+    {
+        return traces_;
+    }
+
     void PipelineCpu::tick()
     {
         // count cycle
         ++counters_.cycles;
+        CycleTrace row{};
+        row.cycle = counters().cycles;
 
         // start with bubbles for the next cycle
         IfIdRegister next_if_id{};
@@ -57,6 +64,7 @@ namespace pipeline_sim
 
         // WB stage: commit the oldest instruction
         if (mem_wb_.valid) {
+            row.wb_pc = mem_wb_.pc;
             ++counters_.retired_instructions;
             if (mem_wb_.write_enable) {
                 registers().write(mem_wb_.instruction.rd, mem_wb_.write_value);
@@ -65,6 +73,7 @@ namespace pipeline_sim
 
         // MEM stage: reads the current EX/MEM and fill next MEM/WB
         if (ex_mem_.valid) {
+            row.mem_pc = ex_mem_.pc;
             next_mem_wb.valid = true;
             next_mem_wb.pc = ex_mem_.pc;
             next_mem_wb.instruction = ex_mem_.instruction;
@@ -100,6 +109,7 @@ namespace pipeline_sim
 
         // EX stage: reads the current ID/EX register
         if (id_ex_.valid) {
+            row.ex_pc = id_ex_.pc;
             next_ex_mem.valid = true;
             next_ex_mem.pc = id_ex_.pc;
             next_ex_mem.instruction = id_ex_.instruction;
@@ -184,6 +194,7 @@ namespace pipeline_sim
             // setup for ID/EX
             next_id_ex.valid = true;
             next_id_ex.pc = if_id_.pc;
+            row.id_pc = if_id_.pc;
             next_id_ex.instruction = instruction;
             next_id_ex.rs1_value = registers().read(instruction.rs1);
             next_id_ex.rs2_value = registers().read(instruction.rs2);
@@ -193,14 +204,17 @@ namespace pipeline_sim
 
         std::uint32_t next_pc = pc();
         if (branch_redirect) {
+           row.branch_redirected = true;
             next_pc = next_ex_mem.branch_target;
 
         } else if (load_use_hazard) {
+            row.load_use_stall = true;
             next_if_id = if_id_;
         } else {
             next_if_id.valid = true;
             next_if_id.pc = pc();
             next_if_id.raw_instruction = memory().load_word(pc());
+            row.if_pc = next_if_id.pc;
             next_pc = pc()+4;
         }
         if_id_ = next_if_id;
@@ -208,5 +222,6 @@ namespace pipeline_sim
         ex_mem_ = next_ex_mem;
         mem_wb_ = next_mem_wb;
         pc_ = next_pc;
+        traces_.push_back(row);
     }
 } // pipeline_sim

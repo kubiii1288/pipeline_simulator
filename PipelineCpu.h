@@ -10,6 +10,9 @@
 #include "RegisterFile.h"
 #include <cstdint>
 #include <cstddef>
+#include <optional>
+#include <vector>
+
 namespace pipeline_sim
 {
     struct PerformanceCounters
@@ -21,11 +24,23 @@ namespace pipeline_sim
         std::uint64_t taken_branches{0};
 
     };
+    struct CycleTrace
+    {
+        std::uint64_t cycle{0};
+        std::optional<std::uint32_t> if_pc;
+        std::optional<std::uint32_t> id_pc;
+        std::optional<std::uint32_t> ex_pc;
+        std::optional<std::uint32_t> mem_pc;
+        std::optional<std::uint32_t> wb_pc;
+        bool load_use_stall{false};
+        bool branch_redirected{false};
+    };
     class PipelineCpu
     {
     public:
         explicit PipelineCpu(std::size_t memory_size);
         const PerformanceCounters& counters() const noexcept;
+        const std::vector<CycleTrace>& trace() const noexcept;
         void tick();
 
         std::uint32_t pc() const noexcept;
@@ -40,6 +55,7 @@ namespace pipeline_sim
         ExMemRegister ex_mem_{};
         MemWbRegister mem_wb_{};
         PerformanceCounters counters_{};
+        std::vector<CycleTrace> traces_{};
     };
 } // pipeline_sim
 

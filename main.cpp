@@ -77,6 +77,16 @@ void testBasicPipeline()
     for (int cycle = 0; cycle < 7; ++cycle) {
         cpu.tick();
     }
+    const auto& rows = cpu.trace();
+    assert(rows.size() == 7);
+    assert(rows[0].cycle == 1);
+    assert(rows[0].if_pc == 0u);
+    assert(!rows[0].wb_pc.has_value());
+
+    assert(rows[1].id_pc == 0u);
+    assert(rows[2].ex_pc == 0u);
+    assert(rows[3].mem_pc == 0u);
+    assert(rows[4].wb_pc == 0u);
 
     assert(cpu.registers().read(0) == 0);
     assert(cpu.registers().read(1) == 5);
@@ -139,6 +149,19 @@ void testLoadUseStall()
     for (int cycle = 0; cycle < 7; ++cycle) {
         cpu.tick();
     }
+    const auto& rows = cpu.trace();
+    assert(rows.size() == 7);
+
+    const auto& stall = rows[2];  // Cycle 3
+    assert(stall.load_use_stall);
+    assert(stall.ex_pc == 0u);    // LW still runs in EX
+    assert(!stall.id_pc.has_value());
+    assert(!stall.if_pc.has_value());
+
+    const auto& resume = rows[3]; // Cycle 4
+    assert(!resume.load_use_stall);
+    assert(resume.mem_pc == 0u);  // LW advances to MEM
+    assert(resume.id_pc == 4u);   // The dependent ADD finally decodes
 
     assert(cpu.registers().read(1) == 21);
     assert(cpu.registers().read(2) == 42);
@@ -171,6 +194,20 @@ void testTakenBranchFlush()
     for (int cycle = 0; cycle < 10; ++cycle) {
         cpu.tick();
     }
+
+    const auto& rows = cpu.trace();
+    assert(rows.size() == 10);
+
+    const auto& redirect = rows[4];  // Cycle 5
+    assert(redirect.ex_pc == 8u);    // BEQ resolves in EX
+    assert(redirect.branch_redirected);
+    assert(!redirect.id_pc.has_value());
+    assert(!redirect.if_pc.has_value());
+
+    assert(!rows[5].branch_redirected);
+    assert(rows[5].if_pc == 20u);    // Cycle 6 fetches the target
+
+
     assert(cpu.registers().read(1) == 5);
     assert(cpu.registers().read(2) == 5);
     assert(cpu.registers().read(3) == 0);  // Flushed
