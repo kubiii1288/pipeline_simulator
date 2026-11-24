@@ -15,4 +15,5 @@ add_executable(pipeline_simulator main.cpp
         SequentialCpu.h
         PipelineRegisters.h
         PipelineCpu.cpp
-        PipelineCpu.h)
+        PipelineCpu.h
+        Instruction.cpp)

@@ -34,7 +34,13 @@ namespace pipeline_sim
         IdExRegister next_id_ex{};
         ExMemRegister next_ex_mem{};
         MemWbRegister next_mem_wb{};
-
+        bool load_use_hazard = false;
+        if (id_ex_.valid && is_load(id_ex_.instruction.operation) && id_ex_.instruction.rd != 0 && if_id_.valid) {
+            const DecodedInstruction waiting_instruction = decode(if_id_.raw_instruction);
+            const bool rs1_hazard = uses_rs1(waiting_instruction.operation) && waiting_instruction.rs1 == id_ex_.instruction.rd;
+            const bool rs2_hazard = uses_rs2(waiting_instruction.operation) && waiting_instruction.rs2 == id_ex_.instruction.rd;
+            load_use_hazard = rs1_hazard || rs2_hazard;
+        }
 
         // WB stage: commit the oldest instruction
         if (mem_wb_.valid && mem_wb_.write_enable) {
@@ -82,42 +88,63 @@ namespace pipeline_sim
             next_ex_mem.pc = id_ex_.pc;
             next_ex_mem.instruction = id_ex_.instruction;
 
+            std::uint32_t rs1_operand = id_ex_.rs1_value;
+            std::uint32_t rs2_operand = id_ex_.rs2_value;
+            const bool can_forward_from_mem_wb = mem_wb_.valid && mem_wb_.write_enable && mem_wb_.instruction.rd != 0;
+            if (can_forward_from_mem_wb) {
+               if (uses_rs1(id_ex_.instruction.operation) && id_ex_.instruction.rs1 == mem_wb_.instruction.rd) {
+                   rs1_operand = mem_wb_.write_value;
+               }
+                if (uses_rs2(id_ex_.instruction.operation) && id_ex_.instruction.rs2 == mem_wb_.instruction.rd) {
+                    rs2_operand = mem_wb_.write_value;
+                }
+            }
+
+            const bool can_forward_from_ex_mem = ex_mem_.valid && writes_register(ex_mem_.instruction.operation) && !is_load(ex_mem_.instruction.operation) && ex_mem_.instruction.rd != 0;
+            if (can_forward_from_ex_mem) {
+                if (uses_rs1(id_ex_.instruction.operation) && id_ex_.instruction.rs1 == ex_mem_.instruction.rd) {
+                   rs1_operand = ex_mem_.alu_result;
+                }
+                if (uses_rs2(id_ex_.instruction.operation) && id_ex_.instruction.rs2 == ex_mem_.instruction.rd) {
+                    rs2_operand = ex_mem_.alu_result;
+                }
+            }
             switch (id_ex_.instruction.operation) {
              case Operation::Add :
             {
-                next_ex_mem.alu_result = id_ex_.rs1_value + id_ex_.rs2_value;
+                next_ex_mem.alu_result = rs1_operand + rs2_operand;
                 break;
             }
             case Operation::Sub :
             {
-                next_ex_mem.alu_result = id_ex_.rs1_value - id_ex_.rs2_value;
+                next_ex_mem.alu_result = rs1_operand - rs2_operand;
                 break;
             }
 
             case Operation::Addi:
             {
-                next_ex_mem.alu_result = id_ex_.rs1_value + static_cast<std::uint32_t>(id_ex_.instruction.immediate);
+                next_ex_mem.alu_result = rs1_operand + static_cast<std::uint32_t>(id_ex_.instruction.immediate);
                break;
             }
 
             case Operation::Lw:
             {
-                next_ex_mem.alu_result = id_ex_.rs1_value + static_cast<std::uint32_t>(id_ex_.instruction.immediate);
+                next_ex_mem.alu_result = rs1_operand + static_cast<std::uint32_t>(id_ex_.instruction.immediate);
                 break;
             }
 
             case Operation::Sw :
             {
                 const std::uint32_t offset = static_cast<std::uint32_t>(id_ex_.instruction.immediate);
-                next_ex_mem.alu_result = id_ex_.rs1_value + offset;
-                next_ex_mem.store_value = id_ex_.rs2_value;
+                next_ex_mem.alu_result = rs1_operand + offset;
+                next_ex_mem.store_value = rs2_operand;
                break;
             }
 
             case Operation::Beq:
             {
                 const std::uint32_t offset = static_cast<std::uint32_t>(id_ex_.instruction.immediate);
-                next_ex_mem.branch_taken = id_ex_.rs1_value == id_ex_.rs2_value;
+                next_ex_mem.branch_taken = rs1_operand == rs2_operand;
                 next_ex_mem.branch_target = id_ex_.pc + offset;
                break;
             }
@@ -127,7 +154,7 @@ namespace pipeline_sim
         }
 
         // ID stage: reads the current IF/ID register.
-        if (if_id_.valid) {
+        if (if_id_.valid && !load_use_hazard) {
             const DecodedInstruction instruction = decode(if_id_.raw_instruction);
             if (instruction.operation == Operation::Invalid) {
                 throw std::invalid_argument("invalid instruction");
@@ -141,12 +168,16 @@ namespace pipeline_sim
         }
 
         // IF stage: create the next IF/ID value
-        next_if_id.valid = true;
-        next_if_id.pc = pc();
-        next_if_id.raw_instruction = memory().load_word(pc());
 
-        const std::uint32_t next_pc = pc() +4;
-
+        std::uint32_t next_pc = pc();
+        if (load_use_hazard) {
+            next_if_id = if_id_;
+        } else {
+            next_if_id.valid = true;
+            next_if_id.pc = pc();
+            next_if_id.raw_instruction = memory().load_word(pc());
+            next_pc = pc()+4;
+        }
         if_id_ = next_if_id;
         id_ex_ = next_id_ex;
         ex_mem_ = next_ex_mem;

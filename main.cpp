@@ -60,7 +60,6 @@ void testNegativeOffsetsAndBranches()
     // Final branch at address 24 jumps backward to address 20.
     assert(cpu.pc() == 20);
 }
-
 void testBasicPipeline()
 {
     pipeline_sim::PipelineCpu cpu{256};
@@ -85,9 +84,72 @@ void testBasicPipeline()
     assert(cpu.registers().read(3) == 9);
     assert(cpu.pc() == 28);
 }
+
+void testExMemForwarding()
+{
+    pipeline_sim::PipelineCpu cpu{256};
+
+    cpu.memory().store_word(0, 0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4, 0x00108133u); // add  x2, x1, x1
+
+    cpu.memory().store_word(8,  0x00000013u);
+    cpu.memory().store_word(12, 0x00000013u);
+    cpu.memory().store_word(16, 0x00000013u);
+    cpu.memory().store_word(20, 0x00000013u);
+
+    for (int cycle = 0; cycle < 6; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 5);
+    assert(cpu.registers().read(2) == 10);
+}
+
+void testMemWbForwarding()
+{
+    pipeline_sim::PipelineCpu cpu(256);
+    cpu.memory().store_word(0, 0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4, 0x00700193u); // addi x3, x0, 7
+    cpu.memory().store_word(8, 0x00108133u); // add  x2, x1, x1
+    cpu.memory().store_word(12, 0x00000013u);
+    cpu.memory().store_word(16, 0x00000013u);
+    cpu.memory().store_word(20, 0x00000013u);
+    cpu.memory().store_word(24, 0x00000013u);
+    for (int cycle = 0; cycle < 7; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 5);
+    assert(cpu.registers().read(2) == 10);
+    assert(cpu.registers().read(3) == 7);
+}
+
+void testLoadUseStall()
+{
+    pipeline_sim::PipelineCpu cpu{256};
+
+    cpu.memory().store_word(64, 21);          // Data to load
+
+    cpu.memory().store_word(0, 0x04002083u);  // lw  x1, 64(x0)
+    cpu.memory().store_word(4, 0x00108133u);  // add x2, x1, x1
+    cpu.memory().store_word(8,  0x00000013u);
+    cpu.memory().store_word(12, 0x00000013u);
+    cpu.memory().store_word(16, 0x00000013u);
+    cpu.memory().store_word(20, 0x00000013u);
+    for (int cycle = 0; cycle < 7; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 21);
+    assert(cpu.registers().read(2) == 42);
+    assert(cpu.pc() == 24);
+}
 int main() {
     testSequentialCPU();
     testNegativeOffsetsAndBranches();
     testBasicPipeline();
+    testExMemForwarding();
+    testMemWbForwarding();
+    testLoadUseStall();
     return 0;
 }

@@ -30,5 +30,9 @@ namespace pipeline_sim
         std::int32_t immediate{0};
 
     };
+    bool uses_rs1(Operation op) noexcept;
+    bool uses_rs2(Operation op) noexcept;
+    bool writes_register(Operation op) noexcept;
+    bool is_load(Operation op) noexcept;
 }
 #endif //PIPELINE_SIMULATOR_INSTRUCTION_H
