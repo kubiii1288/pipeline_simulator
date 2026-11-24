@@ -144,6 +144,55 @@ void testLoadUseStall()
     assert(cpu.registers().read(2) == 42);
     assert(cpu.pc() == 24);
 }
+
+void testTakenBranchFlush()
+{
+    pipeline_sim::PipelineCpu cpu(256);
+    cpu.memory().store_word(0,  0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4,  0x00500113u); // addi x2, x0, 5
+    cpu.memory().store_word(8,  0x00208663u); // beq  x1, x2, 12
+    cpu.memory().store_word(12, 0x06300193u); // addi x3, x0, 99
+    cpu.memory().store_word(16, 0x05800213u); // addi x4, x0, 88
+    cpu.memory().store_word(20, 0x02A00293u); // addi x5, x0, 42
+    cpu.memory().store_word(24,  0x00000013u);
+    cpu.memory().store_word(28, 0x00000013u);
+    cpu.memory().store_word(32, 0x00000013u);
+    cpu.memory().store_word(36, 0x00000013u);
+
+    for (int cycle = 0; cycle < 10; ++cycle) {
+        cpu.tick();
+    }
+    assert(cpu.registers().read(1) == 5);
+    assert(cpu.registers().read(2) == 5);
+    assert(cpu.registers().read(3) == 0);  // Flushed
+    assert(cpu.registers().read(4) == 0);  // Flushed
+    assert(cpu.registers().read(5) == 42); // Branch target executed
+}
+
+void testNotTakenBranch()
+{
+    pipeline_sim::PipelineCpu cpu{256};
+
+    cpu.memory().store_word(0,  0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4,  0x00600113u); // addi x2, x0, 6
+    cpu.memory().store_word(8,  0x00208663u); // beq  x1, x2, 12
+    cpu.memory().store_word(12, 0x06300193u); // addi x3, x0, 99
+    cpu.memory().store_word(16, 0x05800213u); // addi x4, x0, 88
+    cpu.memory().store_word(20, 0x00000013u);
+    cpu.memory().store_word(24, 0x00000013u);
+    cpu.memory().store_word(28, 0x00000013u);
+    cpu.memory().store_word(32, 0x00000013u);
+
+    for (int cycle = 0; cycle < 9; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 5);
+    assert(cpu.registers().read(2) == 6);
+    assert(cpu.registers().read(3) == 99);
+    assert(cpu.registers().read(4) == 88);
+    assert(cpu.pc() == 36);
+}
 int main() {
     testSequentialCPU();
     testNegativeOffsetsAndBranches();
@@ -151,5 +200,7 @@ int main() {
     testExMemForwarding();
     testMemWbForwarding();
     testLoadUseStall();
+    testTakenBranchFlush();
+    testNotTakenBranch();
     return 0;
 }

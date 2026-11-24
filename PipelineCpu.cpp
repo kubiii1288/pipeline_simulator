@@ -153,8 +153,10 @@ namespace pipeline_sim
             }
         }
 
+        const bool branch_redirect = next_ex_mem.valid && next_ex_mem.instruction.operation == Operation::Beq && next_ex_mem.branch_taken;
+
         // ID stage: reads the current IF/ID register.
-        if (if_id_.valid && !load_use_hazard) {
+        if (if_id_.valid && !load_use_hazard && !branch_redirect) {
             const DecodedInstruction instruction = decode(if_id_.raw_instruction);
             if (instruction.operation == Operation::Invalid) {
                 throw std::invalid_argument("invalid instruction");
@@ -170,7 +172,10 @@ namespace pipeline_sim
         // IF stage: create the next IF/ID value
 
         std::uint32_t next_pc = pc();
-        if (load_use_hazard) {
+        if (branch_redirect) {
+            next_pc = next_ex_mem.branch_target;
+            
+        } else if (load_use_hazard) {
             next_if_id = if_id_;
         } else {
             next_if_id.valid = true;
@@ -183,6 +188,5 @@ namespace pipeline_sim
         ex_mem_ = next_ex_mem;
         mem_wb_ = next_mem_wb;
         pc_ = next_pc;
-
     }
 } // pipeline_sim
