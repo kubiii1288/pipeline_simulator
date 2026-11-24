@@ -5,6 +5,7 @@
 #include "PipelineCpu.h"
 
 #include <stdexcept>
+#include <bits/atomic_base.h>
 
 #include "Decoder.h"
 
@@ -27,8 +28,16 @@ namespace pipeline_sim
         return registers_;
     }
 
+    const PerformanceCounters &PipelineCpu::counters() const noexcept
+    {
+       return counters_;
+    }
+
     void PipelineCpu::tick()
     {
+        // count cycle
+        ++counters_.cycles;
+
         // start with bubbles for the next cycle
         IfIdRegister next_if_id{};
         IdExRegister next_id_ex{};
@@ -42,9 +51,16 @@ namespace pipeline_sim
             load_use_hazard = rs1_hazard || rs2_hazard;
         }
 
+        if (load_use_hazard) {
+            ++counters_.load_use_stalls;
+        }
+
         // WB stage: commit the oldest instruction
-        if (mem_wb_.valid && mem_wb_.write_enable) {
-            registers().write(mem_wb_.instruction.rd, mem_wb_.write_value);
+        if (mem_wb_.valid) {
+            ++counters_.retired_instructions;
+            if (mem_wb_.write_enable) {
+                registers().write(mem_wb_.instruction.rd, mem_wb_.write_value);
+            }
         }
 
         // MEM stage: reads the current EX/MEM and fill next MEM/WB
@@ -143,9 +159,13 @@ namespace pipeline_sim
 
             case Operation::Beq:
             {
+                ++counters_.branches;
                 const std::uint32_t offset = static_cast<std::uint32_t>(id_ex_.instruction.immediate);
                 next_ex_mem.branch_taken = rs1_operand == rs2_operand;
                 next_ex_mem.branch_target = id_ex_.pc + offset;
+                if (next_ex_mem.branch_taken) {
+                    ++counters_.taken_branches;
+                }
                break;
             }
             default:
@@ -174,7 +194,7 @@ namespace pipeline_sim
         std::uint32_t next_pc = pc();
         if (branch_redirect) {
             next_pc = next_ex_mem.branch_target;
-            
+
         } else if (load_use_hazard) {
             next_if_id = if_id_;
         } else {

@@ -143,6 +143,15 @@ void testLoadUseStall()
     assert(cpu.registers().read(1) == 21);
     assert(cpu.registers().read(2) == 42);
     assert(cpu.pc() == 24);
+
+    const auto& counters = cpu.counters();
+
+    assert(counters.cycles == 7);
+    assert(counters.retired_instructions == 2);
+    assert(counters.load_use_stalls == 1);
+    assert(counters.branches == 0);
+    assert(counters.taken_branches == 0);
+
 }
 
 void testTakenBranchFlush()
@@ -167,6 +176,14 @@ void testTakenBranchFlush()
     assert(cpu.registers().read(3) == 0);  // Flushed
     assert(cpu.registers().read(4) == 0);  // Flushed
     assert(cpu.registers().read(5) == 42); // Branch target executed
+
+    const auto& counters = cpu.counters();
+
+    assert(counters.cycles == 10);
+    assert(counters.retired_instructions == 4);
+    assert(counters.load_use_stalls == 0);
+    assert(counters.branches == 1);
+    assert(counters.taken_branches == 1);
 }
 
 void testNotTakenBranch()
@@ -192,6 +209,14 @@ void testNotTakenBranch()
     assert(cpu.registers().read(3) == 99);
     assert(cpu.registers().read(4) == 88);
     assert(cpu.pc() == 36);
+
+    const auto& counters = cpu.counters();
+
+    assert(counters.cycles == 9);
+    assert(counters.retired_instructions == 5);
+    assert(counters.load_use_stalls == 0);
+    assert(counters.branches == 1);
+    assert(counters.taken_branches == 0);
 }
 int main() {
     testSequentialCPU();
