@@ -5,13 +5,18 @@
 #include "PipelineCpu.h"
 
 #include <stdexcept>
+#include <utility>
 #include <bits/atomic_base.h>
 
 #include "Decoder.h"
 
 namespace pipeline_sim
 {
-    PipelineCpu::PipelineCpu(std::size_t memory_size): memory_(memory_size) {}
+    PipelineCpu::PipelineCpu(std::size_t memory_size, std::unique_ptr<BranchPredictor> predictor) : memory_(memory_size), predictor_(std::move(predictor))
+    {
+       if (!predictor_)
+           throw std::invalid_argument("Branch predictor must not be null");
+    }
 
     Memory &PipelineCpu::memory() noexcept
     {
@@ -172,6 +177,10 @@ namespace pipeline_sim
                 ++counters_.branches;
                 const std::uint32_t offset = static_cast<std::uint32_t>(id_ex_.instruction.immediate);
                 next_ex_mem.branch_taken = rs1_operand == rs2_operand;
+                if (id_ex_.prediction.has_value()) {
+                    predictor_->update(id_ex_.pc, *id_ex_.prediction, next_ex_mem.branch_taken);
+                    counters_.branch_misprediction += (id_ex_.prediction->taken != next_ex_mem.branch_taken);
+                }
                 next_ex_mem.branch_target = id_ex_.pc + offset;
                 if (next_ex_mem.branch_taken) {
                     ++counters_.taken_branches;
@@ -183,8 +192,17 @@ namespace pipeline_sim
             }
         }
 
-        const bool branch_redirect = next_ex_mem.valid && next_ex_mem.instruction.operation == Operation::Beq && next_ex_mem.branch_taken;
+        // const bool branch_redirect = next_ex_mem.valid && next_ex_mem.instruction.operation == Operation::Beq && next_ex_mem.branch_taken;
 
+        bool branch_redirect = false;
+        std::uint32_t actual_next_pc = pc();
+        if (next_ex_mem.valid && next_ex_mem.instruction.operation == Operation::Beq) {
+            const std::uint32_t fallthrough = id_ex_.pc + 4;
+            const bool predicted_taken = id_ex_.prediction.has_value() && id_ex_.prediction->taken;
+            const std::uint32_t predicted_next_pc = predicted_taken ? next_ex_mem.branch_target : fallthrough;
+            actual_next_pc = next_ex_mem.branch_taken ? next_ex_mem.branch_target : fallthrough;
+            branch_redirect = predicted_next_pc != actual_next_pc;
+        }
         // ID stage: reads the current IF/ID register.
         if (if_id_.valid && !load_use_hazard && !branch_redirect) {
             const DecodedInstruction instruction = decode(if_id_.raw_instruction);
@@ -196,6 +214,8 @@ namespace pipeline_sim
             next_id_ex.pc = if_id_.pc;
             row.id_pc = if_id_.pc;
             next_id_ex.instruction = instruction;
+            // carry saved prediction from ID to EX
+            next_id_ex.prediction = if_id_.prediction;
             next_id_ex.rs1_value = registers().read(instruction.rs1);
             next_id_ex.rs2_value = registers().read(instruction.rs2);
         }
@@ -205,8 +225,7 @@ namespace pipeline_sim
         std::uint32_t next_pc = pc();
         if (branch_redirect) {
            row.branch_redirected = true;
-            next_pc = next_ex_mem.branch_target;
-
+           next_pc = actual_next_pc;
         } else if (load_use_hazard) {
             row.load_use_stall = true;
             next_if_id = if_id_;
@@ -214,8 +233,16 @@ namespace pipeline_sim
             next_if_id.valid = true;
             next_if_id.pc = pc();
             next_if_id.raw_instruction = memory().load_word(pc());
+
+            next_pc = next_if_id.pc +4;
+            const DecodedInstruction fetched = decode(next_if_id.raw_instruction);
+            if (fetched.operation == Operation::Beq) {
+                next_if_id.prediction = predictor_->predict(next_if_id.pc);
+                if (next_if_id.prediction->taken) {
+                    next_pc = next_if_id.pc + static_cast<std::uint32_t>(fetched.immediate);
+                }
+            }
             row.if_pc = next_if_id.pc;
-            next_pc = pc()+4;
         }
         if_id_ = next_if_id;
         id_ex_ = next_id_ex;

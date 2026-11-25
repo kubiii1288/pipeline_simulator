@@ -221,6 +221,7 @@ void testTakenBranchFlush()
     assert(counters.load_use_stalls == 0);
     assert(counters.branches == 1);
     assert(counters.taken_branches == 1);
+    assert(counters.branch_misprediction == 1);
 }
 
 void testNotTakenBranch()
@@ -254,6 +255,158 @@ void testNotTakenBranch()
     assert(counters.load_use_stalls == 0);
     assert(counters.branches == 1);
     assert(counters.taken_branches == 0);
+    assert(counters.branch_misprediction == 0);
+}
+
+void testCorrectTakenPrediction()
+{
+    pipeline_sim::PipelineCpu cpu{
+        256, std::make_unique<pipeline_sim::AlwaysTakenPredictor>()};
+
+    cpu.memory().store_word(0,  0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4,  0x00500113u); // addi x2, x0, 5
+    cpu.memory().store_word(8,  0x00208663u); // beq  x1, x2, 12
+    cpu.memory().store_word(12, 0x06300193u); // addi x3, x0, 99 (skipped)
+    cpu.memory().store_word(16, 0x05800213u); // addi x4, x0, 88 (skipped)
+    cpu.memory().store_word(20, 0x02A00293u); // addi x5, x0, 42 (target)
+
+    for (std::uint32_t address = 24; address <= 36; address += 4) {
+        cpu.memory().store_word(address, 0x00000013u); // NOP
+    }
+
+    for (int cycle = 0; cycle < 8; ++cycle) {
+        cpu.tick();
+    }
+
+    const auto& rows = cpu.trace();
+    assert(rows.size() == 8);
+    assert(rows[3].if_pc == 20u);         // Cycle 4 fetches the target
+    assert(rows[4].ex_pc == 8u);          // Cycle 5 resolves the branch
+    assert(!rows[4].branch_redirected);  // The prediction was correct
+    assert(cpu.counters().branch_misprediction == 0);
+
+    assert(cpu.registers().read(3) == 0);
+    assert(cpu.registers().read(4) == 0);
+    assert(cpu.registers().read(5) == 42);
+}
+
+void testIncorrectTakenPrediction()
+{
+    pipeline_sim::PipelineCpu cpu{
+        256, std::make_unique<pipeline_sim::AlwaysTakenPredictor>()};
+
+    cpu.memory().store_word(0,  0x00500093u); // addi x1, x0, 5
+    cpu.memory().store_word(4,  0x00600113u); // addi x2, x0, 6
+    cpu.memory().store_word(8,  0x00208663u); // beq  x1, x2, 12 (not taken)
+    cpu.memory().store_word(12, 0x06300193u); // addi x3, x0, 99 (fallthrough)
+    cpu.memory().store_word(16, 0x05800213u); // addi x4, x0, 88
+    cpu.memory().store_word(20, 0x02A00293u); // addi x5, x0, 42 (predicted target)
+
+    for (std::uint32_t address = 24; address <= 32; address += 4) {
+        cpu.memory().store_word(address, 0x00000013u); // NOP
+    }
+
+    for (int cycle = 0; cycle < 11; ++cycle) {
+        cpu.tick();
+    }
+
+    const auto& rows = cpu.trace();
+    assert(rows.size() == 11);
+    assert(rows[3].if_pc == 20u);        // Cycle 4 follows the prediction
+    assert(rows[4].ex_pc == 8u);         // Cycle 5 resolves the BEQ
+    assert(rows[4].branch_redirected);
+    assert(rows[5].if_pc == 12u);        // Cycle 6 fetches the fallthrough
+    assert(cpu.counters().branch_misprediction == 1);
+
+    assert(cpu.registers().read(3) == 99);
+    assert(cpu.registers().read(4) == 88);
+    assert(cpu.registers().read(5) == 0);
+}
+void testBimodalPredictorLearns()
+{
+    pipeline_sim::BimodalPredictor predictor;
+    constexpr std::uint32_t branch_pc = 24u;
+
+    const auto first = predictor.predict(branch_pc);
+    assert(!first.taken);
+    assert(first.metadata == 6u);
+
+    predictor.update(branch_pc, first, true);
+
+    const auto second = predictor.predict(branch_pc);
+    assert(second.taken);
+}
+
+void testBimodalCountdownLoop()
+{
+    pipeline_sim::PipelineCpu cpu{
+        256, std::make_unique<pipeline_sim::BimodalPredictor>()};
+
+    cpu.memory().store_word(0,  0x00300093u); // addi x1, x0, 3
+    cpu.memory().store_word(4,  0xFFF08093u); // addi x1, x1, -1
+    cpu.memory().store_word(8,  0x00008463u); // beq  x1, x0, +8 (exit to 16)
+    cpu.memory().store_word(12, 0xFE000CE3u); // beq  x0, x0, -8 (loop to 4)
+    cpu.memory().store_word(16, 0x02A00113u); // addi x2, x0, 42
+
+    for (std::uint32_t address = 20; address <= 32; address += 4) {
+        cpu.memory().store_word(address, 0x00000013u); // NOP
+    }
+
+    for (int cycle = 0; cycle < 18; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 0);
+    assert(cpu.registers().read(2) == 42);
+
+    const auto& counters = cpu.counters();
+    assert(counters.branches == 5);
+    assert(counters.branch_misprediction == 2);
+}
+
+void testGshareTrainsSavedSlot()
+{
+    pipeline_sim::GsharePredictor predictor;
+
+    const auto older = predictor.predict(0u);
+    const auto saved = predictor.predict(24u);
+    assert(saved.metadata == 6u);
+    assert(!saved.taken);
+
+    predictor.update(0u, older, true);  // History becomes 1.
+    assert(predictor.predict(24u).metadata == 7u);
+
+    predictor.update(24u, saved, true);  // Train slot 6. History becomes 3.
+
+    const auto probe = predictor.predict(20u);
+    assert(probe.metadata == 6u);
+    assert(probe.taken);
+}
+void testGshareCountdownLoop()
+{
+    pipeline_sim::PipelineCpu cpu{
+        256, std::make_unique<pipeline_sim::GsharePredictor>()};
+
+    cpu.memory().store_word(0,  0x00300093u); // addi x1, x0, 3
+    cpu.memory().store_word(4,  0xFFF08093u); // addi x1, x1, -1
+    cpu.memory().store_word(8,  0x00008463u); // beq  x1, x0, +8 (exit to 16)
+    cpu.memory().store_word(12, 0xFE000CE3u); // beq  x0, x0, -8 (loop to 4)
+    cpu.memory().store_word(16, 0x02A00113u); // addi x2, x0, 42
+
+    for (std::uint32_t address = 20; address <= 32; address += 4) {
+        cpu.memory().store_word(address, 0x00000013u); // NOP
+    }
+
+    for (int cycle = 0; cycle < 22; ++cycle) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(1) == 0);
+    assert(cpu.registers().read(2) == 42);
+
+    const auto& counters = cpu.counters();
+    assert(counters.branches == 5);
+    assert(counters.branch_misprediction == 4);
 }
 int main() {
     testSequentialCPU();
@@ -264,5 +417,11 @@ int main() {
     testLoadUseStall();
     testTakenBranchFlush();
     testNotTakenBranch();
+    testCorrectTakenPrediction();
+    testIncorrectTakenPrediction();
+    testBimodalPredictorLearns();
+    testBimodalCountdownLoop();
+    testGshareTrainsSavedSlot();
+    testGshareCountdownLoop();
     return 0;
 }

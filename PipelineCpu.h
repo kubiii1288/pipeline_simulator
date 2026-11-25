@@ -12,7 +12,9 @@
 #include <cstddef>
 #include <optional>
 #include <vector>
-
+#include "BranchPredictor.h"
+#include <memory>
+#include <utility>
 namespace pipeline_sim
 {
     struct PerformanceCounters
@@ -22,6 +24,7 @@ namespace pipeline_sim
         std::uint64_t load_use_stalls{0};
         std::uint64_t branches{0};
         std::uint64_t taken_branches{0};
+        std::uint64_t branch_misprediction{0};
 
     };
     struct CycleTrace
@@ -38,7 +41,7 @@ namespace pipeline_sim
     class PipelineCpu
     {
     public:
-        explicit PipelineCpu(std::size_t memory_size);
+        explicit PipelineCpu(std::size_t memory_size, std::unique_ptr<BranchPredictor> predictor = std::make_unique<AlwaysNotTakenPredictor>());
         const PerformanceCounters& counters() const noexcept;
         const std::vector<CycleTrace>& trace() const noexcept;
         void tick();
@@ -56,6 +59,7 @@ namespace pipeline_sim
         MemWbRegister mem_wb_{};
         PerformanceCounters counters_{};
         std::vector<CycleTrace> traces_{};
+        std::unique_ptr<BranchPredictor> predictor_;
     };
 } // pipeline_sim
 

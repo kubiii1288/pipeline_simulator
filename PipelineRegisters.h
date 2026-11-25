@@ -5,6 +5,8 @@
 #ifndef PIPELINE_SIMULATOR_PIPELINEREGISTERS_H
 #define PIPELINE_SIMULATOR_PIPELINEREGISTERS_H
 #include <cstdint>
+#include <optional>
+#include "BranchPredictor.h"
 #include "Instruction.h"
 namespace pipeline_sim
 {
@@ -14,6 +16,7 @@ namespace pipeline_sim
         std::uint32_t pc{0};
 
         std::uint32_t raw_instruction{0};
+        std::optional<BranchPrediction> prediction{};
     };
 
     struct IdExRegister
@@ -25,6 +28,7 @@ namespace pipeline_sim
 
         std::uint32_t rs1_value{0};
         std::uint32_t rs2_value{0};
+        std::optional<BranchPrediction> prediction{};
     };
 
     struct ExMemRegister
