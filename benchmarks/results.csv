@@ -1,0 +1,7 @@
+workload,predictor,cycles,retired_instructions,mispredictions
+Countdown,Always not taken,5005,3001,1000
+Countdown,Bimodal,3009,3001,2
+Countdown,Gshare,3017,3001,6
+Correlated branches,Always not taken,13006,9002,2000
+Correlated branches,Bimodal,11010,9002,1002
+Correlated branches,Gshare,9022,9002,8

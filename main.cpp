@@ -2,6 +2,10 @@
 
 #include "PipelineCpu.h"
 #include "SequentialCpu.h"
+#include <utility>
+#include <memory>
+#include <cstdint>
+#include <iostream>
 using namespace std;
 
 void testSequentialCPU()
@@ -60,6 +64,7 @@ void testNegativeOffsetsAndBranches()
     // Final branch at address 24 jumps backward to address 20.
     assert(cpu.pc() == 20);
 }
+
 void testBasicPipeline()
 {
     pipeline_sim::PipelineCpu cpu{256};
@@ -322,6 +327,7 @@ void testIncorrectTakenPrediction()
     assert(cpu.registers().read(4) == 88);
     assert(cpu.registers().read(5) == 0);
 }
+
 void testBimodalPredictorLearns()
 {
     pipeline_sim::BimodalPredictor predictor;
@@ -382,6 +388,7 @@ void testGshareTrainsSavedSlot()
     assert(probe.metadata == 6u);
     assert(probe.taken);
 }
+
 void testGshareCountdownLoop()
 {
     pipeline_sim::PipelineCpu cpu{
@@ -408,6 +415,140 @@ void testGshareCountdownLoop()
     assert(counters.branches == 5);
     assert(counters.branch_misprediction == 4);
 }
+
+void testCorrelatedBranchProgram()
+{
+    pipeline_sim::SequentialCpu cpu{256};
+
+    cpu.memory().store_word(0,  0x00400093u); // addi x1, x0, 4
+    cpu.memory().store_word(4,  0x00100113u); // addi x2, x0, 1
+    cpu.memory().store_word(8,  0x403101B3u); // sub  x3, x2, x3
+    cpu.memory().store_word(12, 0x00018463u); // beq  x3, x0, +8
+    cpu.memory().store_word(16, 0x00120213u); // addi x4, x4, 1
+    cpu.memory().store_word(20, 0x00130313u); // addi x6, x6, 1
+    cpu.memory().store_word(24, 0x00138393u); // addi x7, x7, 1
+    cpu.memory().store_word(28, 0x00018463u); // beq  x3, x0, +8
+    cpu.memory().store_word(32, 0x00128293u); // addi x5, x5, 1
+    cpu.memory().store_word(36, 0xFFF08093u); // addi x1, x1, -1
+    cpu.memory().store_word(40, 0x00008463u); // beq  x1, x0, +8  → 48
+    cpu.memory().store_word(44, 0xFC000EE3u); // beq  x0, x0, -36 → 8
+    cpu.memory().store_word(48, 0x02A00413u); // addi x8, x0, 42
+
+    for (int step = 0; step < 100 && cpu.registers().read(8) != 42; ++step) {
+        cpu.step();
+    }
+
+    assert(cpu.registers().read(8) == 42); // Reached the completion marker
+    assert(cpu.registers().read(1) == 0);  // Finished all four iterations
+    assert(cpu.registers().read(4) == 2);  // Count A
+    assert(cpu.registers().read(5) == 2);  // Count B
+}
+
+pipeline_sim::PerformanceCounters runCorrelatedBranchBenchmark(
+    std::unique_ptr<pipeline_sim::BranchPredictor> predictor)
+{
+    pipeline_sim::PipelineCpu cpu{256, std::move(predictor)};
+
+    cpu.memory().store_word(0,  0x3E800093u); // addi x1, x0, 1000
+    cpu.memory().store_word(4,  0x00100113u); // addi x2, x0, 1
+    cpu.memory().store_word(8,  0x403101B3u); // sub  x3, x2, x3
+    cpu.memory().store_word(12, 0x00018463u); // beq  x3, x0, +8
+    cpu.memory().store_word(16, 0x00120213u); // addi x4, x4, 1
+    cpu.memory().store_word(20, 0x00130313u); // addi x6, x6, 1
+    cpu.memory().store_word(24, 0x00138393u); // addi x7, x7, 1
+    cpu.memory().store_word(28, 0x00018463u); // beq  x3, x0, +8
+    cpu.memory().store_word(32, 0x00128293u); // addi x5, x5, 1
+    cpu.memory().store_word(36, 0xFFF08093u); // addi x1, x1, -1
+    cpu.memory().store_word(40, 0x00008463u); // beq  x1, x0, +8 → 48
+    cpu.memory().store_word(44, 0xFC000EE3u); // beq  x0, x0, -36 → 8
+    cpu.memory().store_word(48, 0x02A00413u); // addi x8, x0, 42
+
+    for (std::uint32_t address = 52; address <= 64; address += 4) {
+        cpu.memory().store_word(address, 0x00000013u); // NOP
+    }
+
+    for (int tick = 0; tick < 30'000 && cpu.registers().read(8) != 42; ++tick) {
+        cpu.tick();
+    }
+
+    assert(cpu.registers().read(8) == 42);
+    assert(cpu.registers().read(1) == 0);
+    assert(cpu.registers().read(4) == 500);
+    assert(cpu.registers().read(5) == 500);
+    assert(cpu.counters().retired_instructions == 9'002);
+
+    return cpu.counters();
+}
+
+void testCorrelatedBranchBenchmark()
+{
+    const auto baseline = runCorrelatedBranchBenchmark(
+        std::make_unique<pipeline_sim::AlwaysNotTakenPredictor>());
+    assert(baseline.branch_misprediction == 2'000);
+    assert(baseline.cycles == 13'006);
+
+    const auto bimodal = runCorrelatedBranchBenchmark(
+        std::make_unique<pipeline_sim::BimodalPredictor>());
+    assert(bimodal.branch_misprediction == 1'002);
+    assert(bimodal.cycles == 11'010);
+
+    const auto gshare = runCorrelatedBranchBenchmark(
+    std::make_unique<pipeline_sim::GsharePredictor>());
+    const auto print_result = [](const char* name,
+                                 const pipeline_sim::PerformanceCounters& counters) {
+        const double cpi =
+            static_cast<double>(counters.cycles) / counters.retired_instructions;
+
+        std::cout << name << ": " << counters.cycles << " cycles, "
+                  << counters.branch_misprediction << " mispredictions, "
+                  << cpi << " CPI\n";
+    };
+
+    print_result("Always not taken (baseline)", baseline);
+    print_result("Bimodal", bimodal);
+    print_result("Gshare", gshare);
+}
+void testCountdownBenchmark()
+{
+    const auto run = [](const char* name,
+                        std::unique_ptr<pipeline_sim::BranchPredictor> predictor) {
+        pipeline_sim::PipelineCpu cpu{256, std::move(predictor)};
+
+        cpu.memory().store_word(0,  0x3E800093u); // addi x1, x0, 1000
+        cpu.memory().store_word(4,  0xFFF08093u); // addi x1, x1, -1
+        cpu.memory().store_word(8,  0x00008463u); // beq x1, x0, +8  → 16
+        cpu.memory().store_word(12, 0xFE000CE3u); // beq x0, x0, -8  → 4
+        cpu.memory().store_word(16, 0x02A00113u); // addi x2, x0, 42
+
+        for (std::uint32_t address = 20; address <= 32; address += 4) {
+            cpu.memory().store_word(address, 0x00000013u); // NOP
+        }
+
+        for (int tick = 0; tick < 10'000 && cpu.registers().read(2) != 42; ++tick) {
+            cpu.tick();
+        }
+
+        assert(cpu.registers().read(2) == 42);
+        assert(cpu.registers().read(1) == 0);
+
+        const auto& counters = cpu.counters();
+        assert(counters.retired_instructions == 3'001);
+
+        const double cpi =
+            static_cast<double>(counters.cycles) / counters.retired_instructions;
+
+        std::cout << name << ": " << counters.cycles << " cycles, "
+                  << counters.branch_misprediction << " mispredictions, "
+                  << cpi << " CPI\n";
+    };
+
+    run("Countdown / Always not taken",
+        std::make_unique<pipeline_sim::AlwaysNotTakenPredictor>());
+    run("Countdown / Bimodal",
+        std::make_unique<pipeline_sim::BimodalPredictor>());
+    run("Countdown / Gshare",
+        std::make_unique<pipeline_sim::GsharePredictor>());
+}
 int main() {
     testSequentialCPU();
     testNegativeOffsetsAndBranches();
@@ -423,5 +564,8 @@ int main() {
     testBimodalCountdownLoop();
     testGshareTrainsSavedSlot();
     testGshareCountdownLoop();
+    testCorrelatedBranchProgram();
+    testCorrelatedBranchBenchmark();
+    testCountdownBenchmark();
     return 0;
 }
